@@ -17,7 +17,7 @@ define('DB_PATH', DATA_DIR . '/synology.db');
 define('SEED_PATH', DATA_DIR . '/seed.json');
 
 // 允许的 DSM 版本清单（后台多选 checkbox 用）
-const KNOWN_VERSIONS = ['6.0', '6.1', '6.2', '7.0', '7.1', '7.2'];
+const KNOWN_VERSIONS = ['4.3', '5.0', '5.1', '5.2', '6.0', '6.1', '6.2', '6.3', '7.0', '7.1', '7.2'];
 
 // ====== 数据库连接 ======
 function db(): PDO
