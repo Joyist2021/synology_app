@@ -4,7 +4,7 @@ require_admin();
 
 $pdo = db();
 $action = $_GET['action'] ?? 'list';
-$msg = '';
+$msg = $_GET['msg'] ?? '';
 
 // ============ 处理 POST（保存 / 删除） ============
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -16,11 +16,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $subArch  = trim($_POST['sub_arch'] ?? '');
         $model    = trim($_POST['model'] ?? '');
         $versions = array_values(array_intersect(KNOWN_VERSIONS, array_keys($_POST['versions'] ?? [])));
-        // 按版本号数值排序
         usort($versions, fn($a, $b) => version_compare($a, $b));
 
         if ($arch === '' || $subArch === '' || $model === '') {
             $msg = '架构、细分架构、型号不能为空';
+            $action = $id > 0 ? 'edit' : 'new';
         } else {
             try {
                 if ($id > 0) {
@@ -29,54 +29,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 versions=:v, updated_at=CURRENT_TIMESTAMP
                          WHERE id=:id'
                     );
-                    $stmt->execute([
-                        ':arch' => $arch, ':sub' => $subArch, ':model' => $model,
-                        ':v' => json_encode($versions, JSON_UNESCAPED_UNICODE), ':id' => $id,
-                    ]);
-                    $msg = '已保存修改';
+                    $stmt->execute([':arch'=>$arch,':sub'=>$subArch,':model'=>$model,
+                                    ':v'=>json_encode($versions, JSON_UNESCAPED_UNICODE),':id'=>$id]);
+                    header('Location: admin.php?msg=' . urlencode('已保存修改'));
                 } else {
                     $stmt = $pdo->prepare(
                         'INSERT INTO nas_models (arch, sub_arch, model, versions)
                          VALUES (:arch, :sub, :model, :v)'
                     );
-                    $stmt->execute([
-                        ':arch' => $arch, ':sub' => $subArch, ':model' => $model,
-                        ':v' => json_encode($versions, JSON_UNESCAPED_UNICODE),
-                    ]);
-                    $msg = '已新增型号';
+                    $stmt->execute([':arch'=>$arch,':sub'=>$subArch,':model'=>$model,
+                                    ':v'=>json_encode($versions, JSON_UNESCAPED_UNICODE)]);
+                    header('Location: admin.php?msg=' . urlencode('已新增型号'));
                 }
+                exit;
             } catch (PDOException $ex) {
-                $msg = '保存失败：' . (str_contains($ex->getMessage(), 'UNIQUE') ? '型号已存在' : $ex->getMessage());
+                $msg = str_contains($ex->getMessage(), 'UNIQUE') ? '该架构+细分架构+型号已存在' : '保存失败：' . $ex->getMessage();
+                $action = $id > 0 ? 'edit' : 'new';
             }
-        }
-        $action = $id > 0 ? 'edit' : 'new';
-        if (!$msg || str_starts_with($msg, '已')) {
-            header('Location: admin.php?msg=' . urlencode($msg));
-            exit;
         }
     } elseif ($postAction === 'delete') {
         $id = (int)($_POST['id'] ?? 0);
-        if ($id > 0) {
-            $pdo->prepare('DELETE FROM nas_models WHERE id=?')->execute([$id]);
-        }
+        if ($id > 0) $pdo->prepare('DELETE FROM nas_models WHERE id=?')->execute([$id]);
         header('Location: admin.php?msg=' . urlencode('已删除'));
         exit;
     }
 }
 
-if (isset($_GET['msg'])) {
-    $msg = $_GET['msg'];
-}
-
-// ============ 取单条记录（编辑用） ============
+// 取单条（编辑用）
 $item = null;
-if (($action === 'edit') && !empty($_GET['id'])) {
+if ($action === 'edit' && !empty($_GET['id'])) {
     $stmt = $pdo->prepare('SELECT * FROM nas_models WHERE id=?');
     $stmt->execute([(int)$_GET['id']]);
     $item = $stmt->fetch() ?: null;
-    if (!$item) {
-        $action = 'list';
+    if (!$item) $action = 'list';
+}
+
+// ============ 列表分页查询 ============
+$perPage = 10;
+$page = max(1, (int)($_GET['page'] ?? 1));
+$q = trim($_GET['q'] ?? '');
+
+if ($action === 'list') {
+    if ($q !== '') {
+        $like = "%$q%";
+        $st = $pdo->prepare("SELECT COUNT(*) FROM nas_models
+                             WHERE arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m");
+        $st->execute([':a'=>$like,':s'=>$like,':m'=>$like]);
+        $total = (int)$st->fetchColumn();
+        $off = ($page-1)*$perPage;
+        $st = $pdo->prepare("SELECT * FROM nas_models
+                             WHERE arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m
+                             ORDER BY id LIMIT $perPage OFFSET :off");
+        $st->execute([':a'=>$like,':s'=>$like,':m'=>$like,':off'=>$off]);
+        $rows = $st->fetchAll();
+    } else {
+        $total = (int)$pdo->query("SELECT COUNT(*) FROM nas_models")->fetchColumn();
+        $off = ($page-1)*$perPage;
+        $rows = $pdo->query("SELECT * FROM nas_models ORDER BY id LIMIT $perPage OFFSET $off")->fetchAll();
     }
+    $totalPages = max(1, (int)ceil($total/$perPage));
+    if ($page > $totalPages) $page = $totalPages;
+    $start = $total === 0 ? 0 : $off+1;
+    $end = min($off+$perPage, $total);
+}
+
+function admin_page_url(int $p): string {
+    $q = trim($GLOBALS['q'] ?? '');
+    $params = ['page' => $p];
+    if ($q !== '') $params['q'] = $q;
+    return '?' . http_build_query($params);
 }
 ?>
 <!DOCTYPE html>
@@ -85,43 +106,148 @@ if (($action === 'edit') && !empty($_GET['id'])) {
 <meta charset="UTF-8">
 <title>后台管理 - 群晖NAS架构查询</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css">
-<link rel="stylesheet" href="lib/jquery.dataTables.min.css">
 <style>
-  body { background:#e9eef2; padding-bottom:30px; }
-  .topbar { background:#212121; color:#fff; padding:12px 20px; margin-bottom:15px; }
-  .topbar h1 { display:inline-block; margin:0; font-size:18px; font-weight:normal; }
-  .topbar a { color:#fff; margin-left:15px; }
-  .panel { background:#fff; border-radius:6px; padding:15px; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    min-height:100vh; color:#e6f1ff;
+    font:14px/1.4 "Microsoft YaHei", Arial, sans-serif;
+    padding:24px 12px 40px;
+    background:linear-gradient(180deg, #061226, #081830);
+  }
+  #bg-slides { position:fixed; inset:0; z-index:-2; overflow:hidden; }
+  #bg-slides .slide {
+    position:absolute; inset:0; background-size:cover; background-position:center;
+    opacity:0; transition:opacity 2s ease-in-out;
+  }
+  #bg-slides .slide.active { opacity:1; }
+  #bg-overlay {
+    position:fixed; inset:0; z-index:-1;
+    background:linear-gradient(180deg, rgba(6,18,38,.65), rgba(8,24,48,.72));
+  }
+
+  .topbar {
+    width:90%; margin:0 auto 16px;
+    background:rgba(255,255,255,.03);
+    border:1px solid rgba(120,180,255,.25);
+    border-radius:10px; padding:14px 20px;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .topbar h1 { font-size:18px; font-weight:600; color:#cfe6ff; }
+  .topbar .links a { color:#9fc3e8; margin-left:15px; text-decoration:none; font-size:13px; }
+  .topbar .links a:hover { color:#fff; }
+
+  .container { width:90%; margin:0 auto; }
+  .panel {
+    background:rgba(255,255,255,.03);
+    border:1px solid rgba(120,180,255,.25);
+    border-radius:10px; padding:16px;
+  }
+
+  table { width:100%; border-collapse:collapse; }
+  th, td { border:1px solid rgba(120,180,255,.18); padding:9px 8px; text-align:center; }
+  thead th {
+    background:linear-gradient(180deg, rgba(74,150,255,.25), rgba(74,150,255,.1));
+    color:#cfe6ff; border-bottom:2px solid rgba(100,180,255,.4);
+  }
+  tbody td { background:rgba(255,255,255,.02); color:#dbe9fa; }
+  tbody tr:hover td { background:rgba(100,180,255,.12); }
+
+  .btn {
+    display:inline-block; padding:6px 14px; border-radius:6px;
+    text-decoration:none; font-size:13px; cursor:pointer;
+    border:1px solid rgba(140,210,255,.45); color:#dceeff;
+    background:transparent;
+    transition:all .2s;
+  }
+  .btn:hover { background:rgba(120,190,255,.9); color:#fff; border-color:rgba(160,220,255,.9); }
+  .btn-danger { border-color:rgba(255,150,150,.5); color:#ffd0d0; }
+  .btn-danger:hover { background:rgba(217,83,79,.9); color:#fff; }
+  .btn-xs { padding:3px 10px; font-size:12px; }
+
+  .alert {
+    padding:10px 14px; border-radius:6px; margin-bottom:12px;
+    background:rgba(74,150,255,.15); border:1px solid rgba(100,180,255,.4); color:#cfe6ff;
+  }
+  .alert-error { background:rgba(217,83,79,.18); border-color:rgba(255,150,150,.4); color:#ffd0d0; }
+
+  .toolbar { margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+  .search-form input[type=text] {
+    padding:7px 12px; width:240px;
+    background:rgba(0,20,50,.55); color:#fff;
+    border:1px solid rgba(120,180,255,.4); border-radius:6px;
+  }
+  .search-form button {
+    padding:7px 16px; margin-left:6px;
+    background:transparent; color:#dceeff;
+    border:1px solid rgba(140,210,255,.5); border-radius:6px; cursor:pointer;
+  }
+
+  .pager {
+    width:100%; margin:12px auto 0;
+    display:flex; justify-content:space-between; align-items:center;
+    color:#b8d4f0; font-size:13px;
+  }
+  .pager .pages a, .pager .pages span {
+    display:inline-block; padding:5px 11px; margin:0 2px;
+    border:1px solid rgba(120,180,255,.3); border-radius:5px;
+    color:#b8d4f0; text-decoration:none; background:rgba(255,255,255,.04);
+  }
+  .pager .pages a:hover { background:rgba(100,180,255,.2); color:#fff; }
+  .pager .pages .current { background:linear-gradient(180deg,#3a8fe8,#2568c4); color:#fff; }
+  .pager .pages .disabled { opacity:.4; }
+
+  .form-group { margin-bottom:12px; }
+  .form-group label { display:block; margin-bottom:5px; color:#b8d4f0; font-size:13px; }
+  .form-control {
+    width:100%; padding:8px 10px;
+    background:rgba(0,20,50,.5); color:#fff;
+    border:1px solid rgba(120,180,255,.4); border-radius:5px; font-size:14px;
+  }
+  .form-control:focus { outline:none; border-color:#4ad6ff; }
+  .checkbox-inline { color:#dbe9fa; margin-right:15px; }
+  .help-block { color:#8fb4d8; font-size:12px; margin-top:5px; }
 </style>
 </head>
 <body>
+<div id="bg-slides">
+  <div class="slide active" style="background-image:url('lib/bg1.jpg')"></div>
+  <div class="slide" style="background-image:url('lib/bg2.jpg')"></div>
+  <div class="slide" style="background-image:url('lib/bg3.jpg')"></div>
+</div>
+<div id="bg-overlay"></div>
+
 <div class="topbar">
-  <h1>群晖NAS · 后台管理</h1>
-  <a href="index.php" target="_blank">查看前台</a>
-  <a href="logout.php">退出登录</a>
+  <h1>⚙ 群晖 NAS · 后台管理</h1>
+  <div class="links">
+    <a href="index.php" target="_blank">查看前台</a>
+    <a href="logout.php">退出登录</a>
+  </div>
 </div>
 
 <div class="container">
 
-<?php if ($msg): ?><div class="alert alert-info"><?= e($msg) ?></div><?php endif; ?>
+<?php if ($msg): ?><div class="alert"><?= e($msg) ?></div><?php endif; ?>
 
-<?php if ($action === 'list'):
-    $rows = $pdo->query('SELECT * FROM nas_models ORDER BY arch, sub_arch, model')->fetchAll();
-?>
+<?php if ($action === 'list'): ?>
 <div class="panel">
-  <div style="margin-bottom:10px;">
-    <a class="btn btn-primary" href="admin.php?action=new">+ 新增型号</a>
-    <span class="text-muted" style="margin-left:10px;">共 <?= count($rows) ?> 条</span>
+  <div class="toolbar">
+    <a class="btn" href="?action=new">+ 新增型号</a>
+    <form class="search-form" method="get" action="">
+      <input type="text" name="q" placeholder="搜索型号/架构" value="<?= e($q) ?>">
+      <button type="submit">搜索</button>
+      <?php if ($q !== ''): ?><a class="btn btn-xs" href="admin.php" style="margin-left:6px;">清除</a><?php endif; ?>
+    </form>
   </div>
-  <table id="listTable" class="table table-bordered table-striped table-hover">
+  <table>
     <thead>
-      <tr><th>ID</th><th>架构</th><th>细分架构</th><th>型号</th><th>可用版本</th><th style="width:140px;">操作</th></tr>
+      <tr><th style="width:60px;">ID</th><th>架构</th><th>细分架构</th><th>型号</th><th>可用版本</th><th style="width:160px;">操作</th></tr>
     </thead>
     <tbody>
-    <?php foreach ($rows as $r):
-        $vs = json_decode($r['versions'], true) ?: [];
-    ?>
+<?php if (!$rows): ?>
+      <tr><td colspan="6" style="padding:20px;">没有记录</td></tr>
+<?php else: foreach ($rows as $r):
+    $vs = json_decode($r['versions'], true) ?: [];
+?>
       <tr>
         <td><?= (int)$r['id'] ?></td>
         <td><?= e($r['arch']) ?></td>
@@ -129,7 +255,7 @@ if (($action === 'edit') && !empty($_GET['id'])) {
         <td><strong><?= e($r['model']) ?></strong></td>
         <td><?= e(implode(' / ', $vs)) ?></td>
         <td>
-          <a class="btn btn-xs btn-default" href="admin.php?action=edit&id=<?= (int)$r['id'] ?>">编辑</a>
+          <a class="btn btn-xs" href="?action=edit&id=<?= (int)$r['id'] ?>">编辑</a>
           <form method="post" style="display:inline;" onsubmit="return confirm('确定删除 <?= e($r['model']) ?>？');">
             <input type="hidden" name="action" value="delete">
             <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
@@ -137,78 +263,94 @@ if (($action === 'edit') && !empty($_GET['id'])) {
           </form>
         </td>
       </tr>
-    <?php endforeach; ?>
+<?php endforeach; endif; ?>
     </tbody>
   </table>
-</div>
 
-<script src="lib/jquery.min.js"></script>
-<script src="lib/jquery.dataTables.min.js"></script>
-<script>
-$(function(){
-  $('#listTable').DataTable({
-    order: [[0,'asc']],
-    stateSave: true,
-    pagingType: 'simple_numbers',
-    pageLength: 10,
-    lengthMenu: [[10,25,50,100],[10,25,50,100]],
-    language: {
-      sSearch:'搜索：', sLengthMenu:'显示 _MENU_ 条',
-      sInfo:'显示 _START_ 到 _END_，共 _TOTAL_ 条',
-      sInfoEmpty:'显示 0 到 0，共 0 条',
-      sZeroRecords:'无记录',
-      oPaginate:{sPrevious:'上一页',sNext:'下一页'}
-    }
-  });
-});
-</script>
+  <div class="pager">
+    <div>显示 <?= $start ?> 到 <?= $end ?>，共 <?= $total ?> 条</div>
+    <div class="pages">
+<?php if ($page > 1): ?>
+      <a href="<?= e(admin_page_url(1)) ?>">首页</a>
+      <a href="<?= e(admin_page_url($page-1)) ?>">上一页</a>
+<?php else: ?>
+      <span class="disabled">首页</span><span class="disabled">上一页</span>
+<?php endif;
+  $win = 2; $sp = max(1,$page-$win); $ep = min($totalPages,$page+$win);
+  if ($sp > 1) echo '<a href="'.e(admin_page_url(1)).'">1</a>';
+  if ($sp > 2) echo '<span class="disabled">…</span>';
+  for ($i=$sp;$i<=$ep;$i++):
+?>
+      <?php if ($i===$page): ?><span class="current"><?= $i ?></span>
+      <?php else: ?><a href="<?= e(admin_page_url($i)) ?>"><?= $i ?></a><?php endif; ?>
+<?php endfor;
+  if ($ep < $totalPages-1) echo '<span class="disabled">…</span>';
+  if ($ep < $totalPages) echo '<a href="'.e(admin_page_url($totalPages)).'">'.$totalPages.'</a>';
+?>
+<?php if ($page < $totalPages): ?>
+      <a href="<?= e(admin_page_url($page+1)) ?>">下一页</a>
+      <a href="<?= e(admin_page_url($totalPages)) ?>">末页</a>
+<?php else: ?>
+      <span class="disabled">下一页</span><span class="disabled">末页</span>
+<?php endif; ?>
+    </div>
+  </div>
+</div>
 
 <?php else:
     $isNew = ($action === 'new');
     $curVersions = $item ? (json_decode($item['versions'], true) ?: []) : [];
 ?>
 <div class="panel" style="max-width:640px;">
-  <h3 style="margin-top:0;"><?= $isNew ? '新增型号' : '编辑型号' ?></h3>
-  <?php if ($msg && !str_starts_with($msg, '已')): ?><div class="alert alert-danger"><?= e($msg) ?></div><?php endif; ?>
+  <h3 style="margin-top:0; color:#cfe6ff;"><?= $isNew ? '新增型号' : '编辑型号' ?></h3>
   <form method="post">
     <input type="hidden" name="action" value="save">
     <input type="hidden" name="id" value="<?= $item ? (int)$item['id'] : 0 ?>">
     <div class="form-group">
       <label>架构（如 armada370 / x86_64）</label>
-      <input class="form-control" name="arch" required
-             value="<?= $item ? e($item['arch']) : '' ?>">
+      <input class="form-control" name="arch" required value="<?= $item ? e($item['arch']) : '' ?>">
     </div>
     <div class="form-group">
       <label>细分架构</label>
-      <input class="form-control" name="sub_arch" required
-             value="<?= $item ? e($item['sub_arch']) : '' ?>">
+      <input class="form-control" name="sub_arch" required value="<?= $item ? e($item['sub_arch']) : '' ?>">
     </div>
     <div class="form-group">
       <label>型号（如 DS218+ / RS214）</label>
-      <input class="form-control" name="model" required
-             value="<?= $item ? e($item['model']) : '' ?>">
+      <input class="form-control" name="model" required value="<?= $item ? e($item['model']) : '' ?>">
     </div>
     <div class="form-group">
       <label>可用 DSM 版本套件</label>
       <div>
-        <?php foreach (KNOWN_VERSIONS as $v):
-            $checked = in_array($v, $curVersions, true);
-        ?>
-        <label class="checkbox-inline" style="margin-left:0;margin-right:15px;">
-          <input type="checkbox" name="versions[<?= e($v) ?>]" <?= $checked ? 'checked' : '' ?>>
+<?php foreach (KNOWN_VERSIONS as $v):
+        $checked = in_array($v, $curVersions, true);
+?>
+        <label class="checkbox-inline">
+          <input type="checkbox" name="versions[<?= e($v) ?>]" <?= $checked?'checked':'' ?>>
           <?= e($v) ?> 套件
         </label>
-        <?php endforeach; ?>
+<?php endforeach; ?>
       </div>
       <p class="help-block">未勾选的版本不会在前台生成对应下载按钮。</p>
     </div>
-    <hr>
-    <button class="btn btn-primary" type="submit">保存</button>
-    <a class="btn btn-default" href="admin.php">取消</a>
+    <hr style="border-color:rgba(120,180,255,.2);margin:14px 0;">
+    <button class="btn" type="submit">保存</button>
+    <a class="btn" href="admin.php" style="margin-left:8px;">取消</a>
   </form>
 </div>
 <?php endif; ?>
 
 </div>
+
+<script>
+(function(){
+  var slides = document.querySelectorAll('#bg-slides .slide');
+  var idx = 0;
+  setInterval(function(){
+    slides[idx].classList.remove('active');
+    idx = (idx + 1) % slides.length;
+    slides[idx].classList.add('active');
+  }, 6000);
+})();
+</script>
 </body>
 </html>
