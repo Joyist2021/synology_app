@@ -150,10 +150,15 @@ $(function(){
   $('#listTable').DataTable({
     order: [[0,'asc']],
     stateSave: true,
-    pageLength: 25,
+    pagingType: 'simple_numbers',
+    pageLength: 10,
+    lengthMenu: [[10,25,50,100],[10,25,50,100]],
     language: {
-      sSearch:'搜索：', sLengthMenu:'每页 _MENU_ 条', sInfo:'共 _TOTAL_ 条',
-      sZeroRecords:'无记录', oPaginate:{sPrevious:'上一页',sNext:'下一页'}
+      sSearch:'搜索：', sLengthMenu:'显示 _MENU_ 条',
+      sInfo:'显示 _START_ 到 _END_，共 _TOTAL_ 条',
+      sInfoEmpty:'显示 0 到 0，共 0 条',
+      sZeroRecords:'无记录',
+      oPaginate:{sPrevious:'上一页',sNext:'下一页'}
     }
   });
 });

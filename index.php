@@ -22,7 +22,9 @@ $rows = $pdo->query(
   .container { background:#fff; border-radius:8px; padding:15px; }
   table.dataTable { width:100% !important; }
   table.dataTable td.arch, table.dataTable td.subarch, table.dataTable td.model { text-align:center; white-space:nowrap; }
-  .pkg-btn { margin:1px 2px; }
+  .pkg-btn { margin:1px 0; }
+  /* 版本按钮按原站风格：一行4个，宽按钮 */
+  .pkg-btn { display:inline-block; width:24%; margin:2px 0.5%; text-align:center; }
 </style>
 </head>
 <body>
@@ -56,7 +58,7 @@ $rows = $pdo->query(
         <td class="model"><strong><?= e($r['model']) ?></strong></td>
         <td>
 <?php foreach ($versions as $v): ?>
-          <a class="btn btn-primary btn-xs pkg-btn" target="_blank"
+          <a class="btn btn-primary pkg-btn" target="_blank"
              href="<?= e(model_download_url($r['model'], $v)) ?>"><?= e($v) ?>套件</a>
 <?php endforeach; ?>
         </td>
@@ -74,13 +76,18 @@ $(function () {
   $('#nasTable').DataTable({
     order: [[0, 'asc'], [2, 'asc']],
     stateSave: true,
-    pageLength: 25,
+    paging: true,
+    pagingType: 'simple_numbers',
+    pageLength: 10,
+    lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
     language: {
-      sSearch: '型号 / 架构：',
-      sLengthMenu: '每页 _MENU_ 条',
-      sInfo: '共 _TOTAL_ 条，显示 _START_ - _END_',
-      sInfoEmpty: '没有记录',
+      sSearch: '群晖型号/架构：',
+      sLengthMenu: '显示 _MENU_ 条',
+      sInfo: '显示 _START_ 到 _END_，共 _TOTAL_ 条',
+      sInfoEmpty: '显示 0 到 0，共 0 条',
+      sInfoFiltered: '（从 _MAX_ 条中筛选）',
       sZeroRecords: '没有找到匹配的记录',
+      sEmptyTable: '暂无数据',
       oPaginate: { sPrevious: '上一页', sNext: '下一页' }
     }
   });
