@@ -86,7 +86,7 @@ if (($action === 'edit') && !empty($_GET['id'])) {
 <title>后台管理 - 群晖NAS架构查询</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/datatables.net-bs/css/dataTables.bootstrap.min.css">
+<link rel="stylesheet" href="lib/jquery.dataTables.min.css">
 <style>
   body { background:#e9eef2; padding-bottom:30px; }
   .topbar { background:#212121; color:#fff; padding:12px 20px; margin-bottom:15px; }
@@ -142,9 +142,8 @@ if (($action === 'edit') && !empty($_GET['id'])) {
   </table>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/jquery/dist/jquery.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/datatables.net/js/jquery.dataTables.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/datatables.net-bs/js/dataTables.bootstrap.min.js"></script>
+<script src="lib/jquery.min.js"></script>
+<script src="lib/jquery.dataTables.min.js"></script>
 <script>
 $(function(){
   $('#listTable').DataTable({
