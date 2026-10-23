@@ -66,6 +66,7 @@ CREATE TABLE nas_models (
     arch       TEXT NOT NULL,          -- 架构，如 armada370 / x86_64
     sub_arch   TEXT NOT NULL,          -- 细分架构，如 avoton / broadwell
     model      TEXT NOT NULL,          -- 型号，如 DS218+ / RS214
+    bay_count  INTEGER NOT NULL DEFAULT 0,  -- 盘位数 1/2/4/5/6/8/12/24
     versions   TEXT NOT NULL DEFAULT '[]',  -- JSON 数组
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -100,13 +101,37 @@ https://www.synology.com/en-global/support/download/{MODEL}?version={VER}#packag
 
 ## 版本清单
 
-后台勾选项包含完整 DSM 版本：
+后台勾选项包含完整 DSM 版本（已按群晖 API 实际返回校准）：
 
 ```
-4.3 / 5.0 / 5.1 / 5.2 / 6.0 / 6.1 / 6.2 / 6.3 / 7.0 / 7.1 / 7.2
+1.0 / 1.1 / 1.2 / 1.3 / 4.0 / 4.1 / 4.2 / 4.3 /
+5.0 / 5.1 / 5.2 / 6.0 / 6.1 / 6.2 /
+7.0 / 7.1 / 7.2 / 7.3 / 7.4
 ```
+
+（6.3 实际不存在，已移除；1.x 为 RT 路由器固件）
 
 ## 更新记录
+
+### v4.0 - 2026-10-23
+
+**数据层**
+- 新增 `bay_count` 盘位字段（INT，默认 0），旧库自动 ALTER TABLE 兼容
+- 从群晖下载中心页面内嵌 JSON 提取 151 个在售型号的盘位映射，老型号按命名规则推断补全
+- 调用群晖 `api/support/findDownloadInfo` API 逐个查询 216 个唯一型号的真实支持版本，174 个型号已用 API 精确版本覆盖（不再凭猜测批量补）
+- 老 EOL 型号（CS406/DS101/DS106/DS207 等）保留原数据
+- 版本清单校准为实际存在的 19 个版本，新增 4.0/4.1/4.2/7.3/7.4，移除 6.3
+
+**前台 index.php**
+- 表头新增"盘位"列（型号右侧），显示 `4-bay` / `2-bay`，无盘位显示 `—`
+- 工具栏新增"架构"下拉 + "盘位"下拉，自动从数据库 DISTINCT 生成
+- 下拉选择即时提交，可与关键词搜索叠加组合筛选
+- 分页链接自动保留所有筛选条件
+
+**后台 admin.php**
+- 列表新增"盘位"列
+- 新增/编辑表单新增"盘位"数字输入框（0-60）
+- 列表同步加架构/盘位下拉筛选，URL 状态保持
 
 ### v3.0 - 2026-10-22
 
