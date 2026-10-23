@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $arch     = trim($_POST['arch'] ?? '');
         $subArch  = trim($_POST['sub_arch'] ?? '');
         $model    = trim($_POST['model'] ?? '');
+        $bayCount = max(0, (int)($_POST['bay_count'] ?? 0));
         $versions = array_values(array_intersect(KNOWN_VERSIONS, array_keys($_POST['versions'] ?? [])));
         usort($versions, fn($a, $b) => version_compare($a, $b));
 
@@ -26,18 +27,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($id > 0) {
                     $stmt = $pdo->prepare(
                         'UPDATE nas_models SET arch=:arch, sub_arch=:sub, model=:model,
-                                                versions=:v, updated_at=CURRENT_TIMESTAMP
+                                                bay_count=:bay, versions=:v, updated_at=CURRENT_TIMESTAMP
                          WHERE id=:id'
                     );
                     $stmt->execute([':arch'=>$arch,':sub'=>$subArch,':model'=>$model,
+                                    ':bay'=>$bayCount,
                                     ':v'=>json_encode($versions, JSON_UNESCAPED_UNICODE),':id'=>$id]);
                     header('Location: admin.php?msg=' . urlencode('已保存修改'));
                 } else {
                     $stmt = $pdo->prepare(
-                        'INSERT INTO nas_models (arch, sub_arch, model, versions)
-                         VALUES (:arch, :sub, :model, :v)'
+                        'INSERT INTO nas_models (arch, sub_arch, model, bay_count, versions)
+                         VALUES (:arch, :sub, :model, :bay, :v)'
                     );
                     $stmt->execute([':arch'=>$arch,':sub'=>$subArch,':model'=>$model,
+                                    ':bay'=>$bayCount,
                                     ':v'=>json_encode($versions, JSON_UNESCAPED_UNICODE)]);
                     header('Location: admin.php?msg=' . urlencode('已新增型号'));
                 }
@@ -68,25 +71,35 @@ if ($action === 'edit' && !empty($_GET['id'])) {
 $perPage = 10;
 $page = max(1, (int)($_GET['page'] ?? 1));
 $q = trim($_GET['q'] ?? '');
+$selArch = trim($_GET['arch'] ?? '');
+$selBay  = (int)($_GET['bay'] ?? 0);
+
+$archOptions = $pdo->query("SELECT DISTINCT arch FROM nas_models ORDER BY arch")->fetchAll(PDO::FETCH_COLUMN);
+$bayOptions  = $pdo->query("SELECT DISTINCT bay_count FROM nas_models WHERE bay_count > 0 ORDER BY bay_count")->fetchAll(PDO::FETCH_COLUMN);
 
 if ($action === 'list') {
+    $where = [];
+    $params = [];
     if ($q !== '') {
-        $like = "%$q%";
-        $st = $pdo->prepare("SELECT COUNT(*) FROM nas_models
-                             WHERE arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m");
-        $st->execute([':a'=>$like,':s'=>$like,':m'=>$like]);
-        $total = (int)$st->fetchColumn();
-        $off = ($page-1)*$perPage;
-        $st = $pdo->prepare("SELECT * FROM nas_models
-                             WHERE arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m
-                             ORDER BY id LIMIT $perPage OFFSET :off");
-        $st->execute([':a'=>$like,':s'=>$like,':m'=>$like,':off'=>$off]);
-        $rows = $st->fetchAll();
-    } else {
-        $total = (int)$pdo->query("SELECT COUNT(*) FROM nas_models")->fetchColumn();
-        $off = ($page-1)*$perPage;
-        $rows = $pdo->query("SELECT * FROM nas_models ORDER BY id LIMIT $perPage OFFSET $off")->fetchAll();
+        $where[] = "(arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m)";
+        $params[':a'] = "%$q%";
+        $params[':s'] = "%$q%";
+        $params[':m'] = "%$q%";
     }
+    if ($selArch !== '') { $where[] = "arch = :arch"; $params[':arch'] = $selArch; }
+    if ($selBay > 0)     { $where[] = "bay_count = :bay"; $params[':bay'] = $selBay; }
+    $whereSql = $where ? (' WHERE ' . implode(' AND ', $where)) : '';
+
+    $off = ($page-1)*$perPage;
+    $st = $pdo->prepare("SELECT COUNT(*) FROM nas_models" . $whereSql);
+    $st->execute($params);
+    $total = (int)$st->fetchColumn();
+
+    $listParams = $params; $listParams[':off'] = $off;
+    $st = $pdo->prepare("SELECT * FROM nas_models" . $whereSql . " ORDER BY id LIMIT $perPage OFFSET :off");
+    $st->execute($listParams);
+    $rows = $st->fetchAll();
+
     $totalPages = max(1, (int)ceil($total/$perPage));
     if ($page > $totalPages) $page = $totalPages;
     $start = $total === 0 ? 0 : $off+1;
@@ -94,9 +107,10 @@ if ($action === 'list') {
 }
 
 function admin_page_url(int $p): string {
-    $q = trim($GLOBALS['q'] ?? '');
     $params = ['page' => $p];
-    if ($q !== '') $params['q'] = $q;
+    if ($GLOBALS['q'] !== '') $params['q'] = $GLOBALS['q'];
+    if ($GLOBALS['selArch'] !== '') $params['arch'] = $GLOBALS['selArch'];
+    if ($GLOBALS['selBay'] > 0) $params['bay'] = $GLOBALS['selBay'];
     return '?' . http_build_query($params);
 }
 ?>
@@ -232,19 +246,31 @@ function admin_page_url(int $p): string {
 <div class="panel">
   <div class="toolbar">
     <a class="btn" href="?action=new">+ 新增型号</a>
-    <form class="search-form" method="get" action="">
+    <form class="search-form" method="get" action="" style="display:flex;gap:8px;align-items:center;">
+      <select name="arch" onchange="this.form.submit()" style="padding:7px 10px;background:rgba(0,20,50,.55);color:#fff;border:1px solid rgba(120,180,255,.4);border-radius:6px;">
+        <option value="">全部架构</option>
+<?php foreach ($archOptions as $a): ?>
+        <option value="<?= e($a) ?>" <?= $selArch===$a?'selected':'' ?>><?= e($a) ?></option>
+<?php endforeach; ?>
+      </select>
+      <select name="bay" onchange="this.form.submit()" style="padding:7px 10px;background:rgba(0,20,50,.55);color:#fff;border:1px solid rgba(120,180,255,.4);border-radius:6px;">
+        <option value="0">全部盘位</option>
+<?php foreach ($bayOptions as $b): ?>
+        <option value="<?= (int)$b ?>" <?= $selBay===(int)$b?'selected':'' ?>><?= (int)$b ?>-bay</option>
+<?php endforeach; ?>
+      </select>
       <input type="text" name="q" placeholder="搜索型号/架构" value="<?= e($q) ?>">
       <button type="submit">搜索</button>
-      <?php if ($q !== ''): ?><a class="btn btn-xs" href="admin.php" style="margin-left:6px;">清除</a><?php endif; ?>
+      <?php if ($q !== '' || $selArch !== '' || $selBay > 0): ?><a class="btn btn-xs" href="admin.php" style="margin-left:4px;">清除</a><?php endif; ?>
     </form>
   </div>
   <table>
     <thead>
-      <tr><th style="width:60px;">ID</th><th>架构</th><th>细分架构</th><th>型号</th><th>可用版本</th><th style="width:160px;">操作</th></tr>
+      <tr><th style="width:60px;">ID</th><th>架构</th><th>细分架构</th><th>型号</th><th style="width:70px;">盘位</th><th>可用版本</th><th style="width:160px;">操作</th></tr>
     </thead>
     <tbody>
 <?php if (!$rows): ?>
-      <tr><td colspan="6" style="padding:20px;">没有记录</td></tr>
+      <tr><td colspan="7" style="padding:20px;">没有记录</td></tr>
 <?php else: foreach ($rows as $r):
     $vs = json_decode($r['versions'], true) ?: [];
 ?>
@@ -253,6 +279,7 @@ function admin_page_url(int $p): string {
         <td><?= e($r['arch']) ?></td>
         <td><?= e($r['sub_arch']) ?></td>
         <td><strong><?= e($r['model']) ?></strong></td>
+        <td><?= $r['bay_count'] > 0 ? (int)$r['bay_count'] . '-bay' : '—' ?></td>
         <td><?= e(implode(' / ', $vs)) ?></td>
         <td>
           <a class="btn btn-xs" href="?action=edit&id=<?= (int)$r['id'] ?>">编辑</a>
@@ -317,6 +344,11 @@ function admin_page_url(int $p): string {
     <div class="form-group">
       <label>型号（如 DS218+ / RS214）</label>
       <input class="form-control" name="model" required value="<?= $item ? e($item['model']) : '' ?>">
+    </div>
+    <div class="form-group">
+      <label>盘位（bay count，如 1/2/4/8/12）</label>
+      <input class="form-control" name="bay_count" type="number" min="0" max="60" style="max-width:160px;"
+             value="<?= $item ? (int)$item['bay_count'] : 0 ?>">
     </div>
     <div class="form-group">
       <label>可用 DSM 版本套件</label>

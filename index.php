@@ -7,46 +7,57 @@ $pdo = db();
 $perPage = 10;
 $page = max(1, (int)($_GET['page'] ?? 1));
 $q = trim($_GET['q'] ?? '');
+$selArch = trim($_GET['arch'] ?? '');
+$selBay  = (int)($_GET['bay'] ?? 0);
 
-// ====== 查询 ======
+// ====== 下拉选项数据 ======
+$archOptions = $pdo->query("SELECT DISTINCT arch FROM nas_models ORDER BY arch")->fetchAll(PDO::FETCH_COLUMN);
+$bayOptions  = $pdo->query("SELECT DISTINCT bay_count FROM nas_models WHERE bay_count > 0 ORDER BY bay_count")->fetchAll(PDO::FETCH_COLUMN);
+
+// ====== 动态 WHERE ======
+$where = [];
+$params = [];
 if ($q !== '') {
-    $like = '%' . $q . '%';
-    $stmt = $pdo->prepare(
-        "SELECT COUNT(*) FROM nas_models
-         WHERE arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m"
-    );
-    $stmt->execute([':a' => $like, ':s' => $like, ':m' => $like]);
-    $total = (int)$stmt->fetchColumn();
-
-    $stmt = $pdo->prepare(
-        "SELECT id, arch, sub_arch, model, versions FROM nas_models
-         WHERE arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m
-         ORDER BY arch, sub_arch, model
-         LIMIT $perPage OFFSET :off"
-    );
-    $off = ($page - 1) * $perPage;
-    $stmt->execute([':a' => $like, ':s' => $like, ':m' => $like, ':off' => $off]);
-    $rows = $stmt->fetchAll();
-} else {
-    $total = (int)$pdo->query("SELECT COUNT(*) FROM nas_models")->fetchColumn();
-    $off = ($page - 1) * $perPage;
-    $rows = $pdo->query(
-        "SELECT id, arch, sub_arch, model, versions FROM nas_models
-         ORDER BY arch, sub_arch, model
-         LIMIT $perPage OFFSET $off"
-    )->fetchAll();
+    $where[] = "(arch LIKE :a OR sub_arch LIKE :s OR model LIKE :m)";
+    $params[':a'] = "%$q%";
+    $params[':s'] = "%$q%";
+    $params[':m'] = "%$q%";
 }
+if ($selArch !== '') {
+    $where[] = "arch = :arch";
+    $params[':arch'] = $selArch;
+}
+if ($selBay > 0) {
+    $where[] = "bay_count = :bay";
+    $params[':bay'] = $selBay;
+}
+$whereSql = $where ? (' WHERE ' . implode(' AND ', $where)) : '';
+
+$off = ($page - 1) * $perPage;
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM nas_models" . $whereSql);
+$countStmt->execute($params);
+$total = (int)$countStmt->fetchColumn();
+
+$listParams = $params;
+$listParams[':off'] = $off;
+$stmt = $pdo->prepare(
+    "SELECT id, arch, sub_arch, model, bay_count, versions FROM nas_models"
+    . $whereSql . " ORDER BY arch, sub_arch, model LIMIT $perPage OFFSET :off"
+);
+$stmt->execute($listParams);
+$rows = $stmt->fetchAll();
 
 $totalPages = max(1, (int)ceil($total / $perPage));
 if ($page > $totalPages) $page = $totalPages;
 $start = $total === 0 ? 0 : $off + 1;
 $end = min($off + $perPage, $total);
 
-// 生成分页 URL，保留搜索词
+// 生成分页 URL，保留搜索/筛选
 function page_url(int $p): string {
-    $q = trim($GLOBALS['q'] ?? '');
     $params = ['page' => $p];
-    if ($q !== '') $params['q'] = $q;
+    if ($GLOBALS['q'] !== '') $params['q'] = $GLOBALS['q'];
+    if ($GLOBALS['selArch'] !== '') $params['arch'] = $GLOBALS['selArch'];
+    if ($GLOBALS['selBay'] > 0) $params['bay'] = $GLOBALS['selBay'];
     return '?' . http_build_query($params);
 }
 ?>
@@ -154,7 +165,8 @@ function page_url(int $p): string {
 </head>
 <body>
 <div id="bg-slides">
-  <div class="slide active" style="background-image:url('lib/bg1.jpg')"></div>
+  <div class="slide active" style="background-image:url('lib/bg-mecha.jpg')"></div>
+  <div class="slide" style="background-image:url('lib/bg1.jpg')"></div>
   <div class="slide" style="background-image:url('lib/bg2.jpg')"></div>
   <div class="slide" style="background-image:url('lib/bg3.jpg')"></div>
 </div>
@@ -167,10 +179,22 @@ function page_url(int $p): string {
 </div>
 
 <div class="toolbar">
-  <form class="search-form" method="get" action="">
+  <form class="search-form" method="get" action="" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <select name="arch" onchange="this.form.submit()" style="padding:7px 10px;background:rgba(0,20,50,.55);color:#fff;border:1px solid rgba(120,180,255,.4);border-radius:6px;">
+      <option value="">全部架构</option>
+<?php foreach ($archOptions as $a): ?>
+      <option value="<?= e($a) ?>" <?= $selArch===$a?'selected':'' ?>><?= e($a) ?></option>
+<?php endforeach; ?>
+    </select>
+    <select name="bay" onchange="this.form.submit()" style="padding:7px 10px;background:rgba(0,20,50,.55);color:#fff;border:1px solid rgba(120,180,255,.4);border-radius:6px;">
+      <option value="0">全部盘位</option>
+<?php foreach ($bayOptions as $b): ?>
+      <option value="<?= (int)$b ?>" <?= $selBay===(int)$b?'selected':'' ?>><?= (int)$b ?>-bay</option>
+<?php endforeach; ?>
+    </select>
     <input type="text" name="q" placeholder="群晖型号/架构" value="<?= e($q) ?>">
     <button type="submit">搜索</button>
-    <?php if ($q !== ''): ?><a href="index.php" style="margin-left:8px;">清除</a><?php endif; ?>
+    <?php if ($q !== '' || $selArch !== '' || $selBay > 0): ?><a href="index.php" style="margin-left:4px;">清除</a><?php endif; ?>
   </form>
   <a href="admin.php"><?= is_admin() ? '后台管理' : '登录后台' ?></a>
 </div>
@@ -183,6 +207,7 @@ function page_url(int $p): string {
         <th style="width:110px;">架构</th>
         <th style="width:130px;">细分架构</th>
         <th style="width:140px;">型号</th>
+        <th style="width:80px;">盘位</th>
         <th>
           <a class="header-btn" target="_blank" href="https://archive.synology.com/download">官网全部套件及客户端</a>
         </th>
@@ -190,7 +215,7 @@ function page_url(int $p): string {
     </thead>
     <tbody>
 <?php if (!$rows): ?>
-      <tr><td colspan="5" style="padding:30px;">没有找到匹配的记录</td></tr>
+      <tr><td colspan="6" style="padding:30px;">没有找到匹配的记录</td></tr>
 <?php else: foreach ($rows as $r):
     $versions = json_decode($r['versions'], true) ?: [];
 ?>
@@ -199,6 +224,7 @@ function page_url(int $p): string {
         <td><?= e($r['arch']) ?></td>
         <td><?= e($r['sub_arch']) ?></td>
         <td><strong><?= e($r['model']) ?></strong></td>
+        <td><?= $r['bay_count'] > 0 ? (int)$r['bay_count'] . '-bay' : '—' ?></td>
         <td>
 <?php foreach ($versions as $v): ?>
           <a class="pkg-btn" target="_blank"

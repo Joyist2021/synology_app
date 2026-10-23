@@ -17,7 +17,7 @@ define('DB_PATH', DATA_DIR . '/synology.db');
 define('SEED_PATH', DATA_DIR . '/seed.json');
 
 // 允许的 DSM 版本清单（后台多选 checkbox 用）
-const KNOWN_VERSIONS = ['4.3', '5.0', '5.1', '5.2', '6.0', '6.1', '6.2', '6.3', '7.0', '7.1', '7.2'];
+const KNOWN_VERSIONS = ['1.0', '1.1', '1.2', '1.3', '4.0', '4.1', '4.2', '4.3', '5.0', '5.1', '5.2', '6.0', '6.1', '6.2', '7.0', '7.1', '7.2', '7.3', '7.4'];
 
 // ====== 数据库连接 ======
 function db(): PDO
@@ -49,6 +49,7 @@ function bootstrap_db(): void
             arch       TEXT NOT NULL,
             sub_arch   TEXT NOT NULL,
             model      TEXT NOT NULL,
+            bay_count  INTEGER NOT NULL DEFAULT 0,
             versions   TEXT NOT NULL DEFAULT '[]',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -56,12 +57,18 @@ function bootstrap_db(): void
         )
     SQL);
 
+    // 兼容旧库：bay_count 字段不存在则加上
+    $cols = $pdo->query("PRAGMA table_info(nas_models)")->fetchAll();
+    if (!in_array('bay_count', array_column($cols, 'name'))) {
+        $pdo->exec("ALTER TABLE nas_models ADD COLUMN bay_count INTEGER NOT NULL DEFAULT 0");
+    }
+
     if ($fresh && is_file(SEED_PATH)) {
         $seed = json_decode(file_get_contents(SEED_PATH), true);
         if (is_array($seed) && $seed) {
             $ins = $pdo->prepare(
-                'INSERT OR IGNORE INTO nas_models (arch, sub_arch, model, versions)
-                 VALUES (:arch, :sub_arch, :model, :versions)'
+                'INSERT OR IGNORE INTO nas_models (arch, sub_arch, model, bay_count, versions)
+                 VALUES (:arch, :sub_arch, :model, :bay, :versions)'
             );
             $pdo->beginTransaction();
             foreach ($seed as $row) {
@@ -69,6 +76,7 @@ function bootstrap_db(): void
                     ':arch'     => $row['arch'] ?? '',
                     ':sub_arch' => $row['sub_arch'] ?? '',
                     ':model'    => $row['model'] ?? '',
+                    ':bay'      => (int)($row['bay_count'] ?? 0),
                     ':versions' => json_encode(array_values($row['versions'] ?? []), JSON_UNESCAPED_UNICODE),
                 ]);
             }
